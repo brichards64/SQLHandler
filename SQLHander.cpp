@@ -6,6 +6,8 @@ SQLHandler(zmq::context_t* context){
   context=m_context;
   sock=new zmq::socket_t(m_context, ZMQ_PAIR);
   sock->bind("inproc://SQLThread");
+  sock.setsockopt(ZMQ_RCVTIMEO, 1000);
+  sock.setsockopt(ZMQ_SNDTIMEO, 1000);
 
   args = new SQLThread_args(context);
   pthread_create(&(args->thread), NULL, SQLHandler::Thread, args);
@@ -28,6 +30,8 @@ void *SQLHandler::Thread(void *arg){
     
   zmq::socket_t sock(args->m_context, ZMQ_PAIR);
   sock.connect("inproc://SQLThread");
+  sock.setsockopt(ZMQ_RCVTIMEO, args->recv_timeout);
+  sock.setsockopt(ZMQ_SNDTIMEO, args->send_timeout);
   
   zmq::socket_t sock dealer(args->m_context, ZMQ_DEALER);
   dealer.bind("tcp://*:77777");
@@ -122,7 +126,7 @@ void *SQLHandler::Thread(void *arg){
 	    else if(iss.str()=="wa") message_queue_akn[msgid]=Message_info(message);
 	    else if(iss.str()=="ws" || iss.str()=="r"){ //write syncronous so send straight away
 	      
-	      //poll? wont block on pub but might fall over?
+	      //poll? wont block on pub but might fall over? probably worth adding
 	      zmq::message_t id(sizeof(unsigned int));
 	      memcpy(id.data(), &msgid, sizeof(unsigned int));
 
@@ -236,7 +240,7 @@ bool SQLHandler::SendToThread(std::string message, std::string id){
 
   bool ret=true;
   ret*=sock->send(mid, ZMQ_SNDMORE);  
-  ret*=sock->send(msg);   // need to add timeout fail
+  ret*=sock->send(msg);   // could poll here but may be overkill. likely not as thread could be busy and timeout of poll wihtout sending would be a better return value;
 
   return ret;
 }
@@ -252,7 +256,7 @@ bool SQLHandler::Write_forget(std::string table, std::string data, std::string f
   if(conditions!="") tmp<<" Where "<<conditions;
   tmp<<";";
 
-  return SendToThread(tmp.str(), "wf"); // need to add timeout fail
+  return SendToThread(tmp.str(), "wf"); 
 }
 
 bool SQLHandler:: Write_asyncronous(std::string table, std::string data, std::string fields, std::string conditions){
@@ -265,7 +269,7 @@ bool SQLHandler:: Write_asyncronous(std::string table, std::string data, std::st
   if(conditions!="") tmp<<" Where "<<conditions;
   tmp<<";";
 
-  return SendToThread(tmp.str(), "wa"); //need to add timeoutfial
+  return SendToThread(tmp.str(), "wa"); 
 
 }
 
@@ -279,7 +283,7 @@ bool SQLHandler:: Write_syncronous(std::string table, std::string data, std::str
   if(conditions!="") tmp<<" Where "<<conditions;
   tmp<<";";
 
-  if(SendToThread(tmp.str(), "ws") && AknFromThread() ) // need to add timeout fail
+  if(SendToThread(tmp.str(), "ws") && AknFromThread() )  // need to impliment akn from thread
     return true;
   }
   else return false;
@@ -298,7 +302,7 @@ bool SQLHandler:: Read(std::string table, Store& store, std::string fields, std:
   if(SendToThread(tmp.str(), "r")){
 
     zmq::message_t reply;
-    sock->recv(msg); //need to add timeout fail
+    sock->recv(msg); //need to add more check and probably poll
     
 
 

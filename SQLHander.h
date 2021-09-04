@@ -68,13 +68,16 @@ class SQLHandler{
   bool Read(std::string table, Store& store, std::string fields="*", std::string conditions="");
   
  private:
+
+
+  bool SendToThread(std::string message, std::string id);  
+  static void* Thread(void *arg); ///< Thread with args
   
   zmq::context_t* m_context; 
   zmq::socket_t* sock;
   pthread_t thread; ///< Simple constructor underlying thread that interface is built ontop of  
-  static void* Thread(void *arg); ///< Thread with args
   SQLThread_args* args;  
-
+  
 };
 
 
