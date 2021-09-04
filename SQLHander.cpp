@@ -9,8 +9,7 @@ SQLHandler(zmq::context_t* context){
 
   args = new SQLThread_args(context);
   pthread_create(&(args->thread), NULL, SQLHandler::Thread, args);
-  args->running=true;
-
+  
 
 }
 
@@ -19,96 +18,213 @@ void *SQLHandler::Thread(void *arg){
 
   SQLThread_args *args = static_cast<SQLThread_args *>(arg);
 
-  zmq::socket_t sock(m_context, ZMQ_PAIR);
+  boost::posix_time::time_duration resen_period=boost::posix_time::seconds(args->resend_period);
+  boost::posix_time::time_duration requet_timeout=boost::posix_time::seconds(args->reques_timeout);
+
+  char identity[srgs->identity_length];
+  srand( (unsigned) time(NULL) * getpid());
+  char alphanum[] = "qwertyuiopasdfghjklzxcvbnm1234567890QWERTYUIOPASDFGHJKLZXCVBNM"
+  for (int i = 0; i < identity_length; ++i) identity[i]= alphanum[rand() % (sizeof(alphanum) - 1)];
+    
+  zmq::socket_t sock(args->m_context, ZMQ_PAIR);
   sock.connect("inproc://SQLThread");
   
-  zmq::socket_t sock dealer(m_context, ZMQ_DEALER);
+  zmq::socket_t sock dealer(args->m_context, ZMQ_DEALER);
   dealer.bind("tcp://*:77777");
+  dealer.setsockopt(ZMQ_RCVTIMEO, args->recv_timeout);
+  dealer.setsockopt(ZMQ_SNDTIMEO, args->send_timeout);
+  dealer.setsockopt(ZMQ_IDENTITY, identity);
   
-  zmq::socket_t pub(m_context, ZMQ_PUB);
+  zmq::socket_t pub(args->m_context, ZMQ_PUB);
   pub.bind("tcp://*:77778");
-  
+  pub.setsockopt(ZMQ_RCVTIMEO, args->recv_timeout);
+  pub.setsockopt(ZMQ_SNDTIMEO, args->send_timeout);
+ 
   zmq::pollitem_t initems[2]={{sock,0,ZMQ_POLLIN,0},{dealer,0,ZMQ_POLLIN,0}};
   zmq::pollitem_t outitems[3]={{sock,0,ZMQ_POLLOUT,0},{dealer,0,ZMQ_POLLOUT,0}, {pub,0,ZMQ_POLLOUT,0}};
   
-  std::map<unsigned long, zmq::message_t> message_queue;
-  std::map<unsigned long, zmq::message_t> message_queue_akn;
-  std::map<unsigned long, zmq::message_t> sent_messages;
+  std::map<unsigned int, zmq::message_t> message_queue;
+  std::map<unsigned int, Message_info> message_queue_akn;
+  std::map<unsigned int, Message_info> sent_messages;
 
-  unsigned long msgid=0;
+  unsigned int msgid=0;
 
   while (!args->kill){
     
-    if(args->running){
- 
       if(mesage_queue.size()>0 || message_queue_akn.size()>0){ //pub messages out
 	zmq::poll(&outitems[2], 1, 0);
-	if(outitems[2].revents & ZMQ_POLLOUT) {
-	  //send pub message from queues
-	}
+	if(outitems[2].revents & ZMQ_POLLOUT) {  //sending out write pub messages
 
-      }//end pub messages out
-      
-      zmq::poll(&initems[0], 2, 100);
-
-
-      if(initems[1].revents & ZMQ_POLLIN){ //received asynronous akn
-
-
-      }
-
-      if(initems[0].revents & ZMQ_POLLIN) { //received new message
-
-
-	zmq::message_t id;
-	zmq::message_t message;
-
-	sock.recv(&id);
-
-	std::istringstream iss(static_cast<char*>(id.data()));
-
-	sock.recv(&message);
-	msgid++;
-	if(iss.str()=="wf") message_queue[msgid]=message;
-	else if(iss.str()=="wa") message_queue_akn[msgid]=message;
-	else if(iss.str()=="ws"){
-
-	  pub.send(id, ZMQ_SNDMORE);
-	  pub.send(message);
-
-	  zmq::poll(&initems[1], 1, 10000);
-
-
-	  if(initems[1].revents & ZMQ_POLLIN) {
-
-	    ///receive messages until you get the right one
-
+	  if(mesage_queue.size()>0){
+	    zmq::message_t msg_identity(sizeof(identity));
+	    memcpy(msg_identity.data(), identity, sizeof(identity));
+	    zmq::message_t id(sizeof(unsigned int));
+	    std::map<unsigned int, zmq::message_t>::iterator it=mesage_queue.begin();
+	    memcpy(id.data(), &(it->first), sizeof(unsigned int));
+	    if(pub.send(msg_identity, ZMQ_SNDMORE) && pub.send(id, ZMQ_SNDMORE) && pub.send(it->second)) message_queue.erase(it);
+	    else std::cout<<"error sending message"<<std::endl;
 	  }
 
 
+	  if(mesage_queue_akn.size()>0){
+	    zmq::message_t msg_identity(sizeof(identity));
+	    memcpy(msg_identity.data(), identity, sizeof(identity));
+	    zmq::message_t id(sizeof(unsigned int));
+	    std::map<unsigned int, Message_info>::iterator it=mesage_queue_akn.begin();
+	    memcpy(id.data(), &(it->first), sizeof(unsigned int));
+	    if(pub.send(msg_identity, ZMQ_SNDMORE) && pub.send(id, ZMQ_SNDMORE) && pub.send(it->second.message)){
+	      it->second.tries++;
+	      it->second.sent_time=boost::posix_time::second_clock::universal_time();
+	      sent_messages[it->first]= it->second;
+	      message_queue_akn.erase(it);
+	    }
+	    else std::cout<<"error sending message"<<std::endl;
+	  }
+	  
+	}	  
+      }//end pub messages out
+      
+      
+      zmq::poll(&initems[0], 2, 100);
+      
+      
+      if(initems[1].revents & ZMQ_POLLIN){ //received asynronous akn
+	
+	zmq::message_t id;
+	if(dealer.recv(&id) && !(id.more())){
+	  unsigned int tmpid=*(reinterpret_cast<unsigned int*>(id.data()));
+	  if(sent_messages.cout(tmpid>0)) sent_messages.erase(tmpid);
 	}
-
-
-	//if message is write syncronous or read do omething straight away else stick on queue;
-
-
-      }
-
-
-      for(int i=0; i<sent_messages.size(); i++){ /// loop over sent messages to add to send queue again
-
+	else if(id.more()){
+	  std::cout<<"receiving unexpected multipart message"<<std::endl;
+	  zmq::message_t tmp;
+	  dealer.recv(&tmp);
+	  while(tmp.more()) dealer.recv(&tmp);
+	}
+	else std::cout<<"error receiving aknowledgement"<<std::endl;
 
       }
 
-    } //end of running
 
-    else usleep(100);
 
-  } // end of while
+      if(initems[0].revents & ZMQ_POLLIN) { //received new message from DAQ
+		
+	zmq::message_t type;
+	zmq::message_t message;
+     
+	if(sock.recv(&type) && type.more()){	  
+
+	  std::istringstream iss(static_cast<char*>(type.data()));
+       
+	  if(sock.recv(&message) && !(message.more())){
+	    msgid++;
+	    if(iss.str()=="wf") message_queue[msgid]=message;
+	    else if(iss.str()=="wa") message_queue_akn[msgid]=Message_info(message);
+	    else if(iss.str()=="ws" || iss.str()=="r"){ //write syncronous so send straight away
+	      
+	      //poll? wont block on pub but might fall over?
+	      zmq::message_t id(sizeof(unsigned int));
+	      memcpy(id.data(), &msgid, sizeof(unsigned int));
+
+	      if(pub.send(id, ZMQ_SNDMORE) && pub.send(message)){
+		
+		boost::posix_time::ptime start = boost::posix_time::second_clock::universal_time();
+		boost::posix_time::time_duration lapse= boost::posix_time::seconds(10);
+
+		while (!(lapse.is_negative())){   ///receive messages until you get the right one
+		  
+		  lapse=request_timeout - (boost::posix_time::second_clock::universal_time() - start);
+		  
+		  zmq::poll(&initems[1], 1, 100);
+		  
+		  if(initems[1].revents & ZMQ_POLLIN) { //receiving akn
+		    
+		    zmq::message_t aknid;
+		    if(dealer.recv(&aknid)){
+		      
+		      if(iss.str()=="ws" && !(aknid.more())){
+			unsigned int tmpid=*(reinterpret_cast<unsigned int*>(aknid.data()));
+			if(aknid==msgid) waiting=false;
+			else if(sent_messages.cout(tmpid>0)) sent_messages.erase(tmpid);
+		      }
+		      else if(iss.str()=="r" && aknid.more()){
+			unsigned int tmpid=*(reinterpret_cast<unsigned int*>(aknid.data()));
+			if(aknid==msgid){
+
+			  //receive a message in some format
+
+			}
+			else{
+			  std::cout<<"receiving unexpected multipart message"<<std::endl;
+			  zmq::message_t tmp;
+			  deler.recv(&tmp);
+			  while(tmp.more()) dealer.recv(&tmp);
+			}
+		      }
+		      else if(aknid.more()){
+			std::cout<<"receiving unexpected multipart message"<<std::endl;
+			zmq::message_t tmp;
+			deler.recv(&tmp);
+			while(tmp.more()) dealer.recv(&tmp);
+		      }
+		      else std::cout<<"error receiving aknowledgement"<<std::endl;
+		    }
+		    else std::cout<<"error receiving aknowledgement"<<std::endl;
+		  }
+		}
+			
+	      }
+	      else std::cout<<"error sending message"<<std::endl;
+	    }
+	    else std::cout<<"unkonwn message type"<<std::endl;
+	    
+	  }
+	  else if(message.more()){
+	    std::cout<<"receiving unexpected multipart message"<<std::endl;
+	    zmq::message_t tmp;
+	    sock.recv(&tmp);
+	    while(tmp.more()) sock.recv(&tmp);
+	  }
+	  else std::cout<<"error receiving aknowledgement"<<std::endl;
+	  
+	}
+	else if(type.more()){
+	  std::cout<<"receiving unexpected multipart message"<<std::endl;
+	  zmq::message_t tmp;
+	  sock.recv(&tmp);
+	  while(tmp.more()) sock.recv(&tmp);
+	}
+	else std::cout<<"error receiving aknowledgement"<<std::endl;
+	
+	
+	
+      }
+
+
+      std::vector<unsigned int> del_list;
+      for(std::map<unsigned int, std::pair <boost::posix_time::ptime, zmq::message_t> >::iterator it= sent_messages.begin(); it!=sent_messages.end(); it++){ /// loop over sent messages to add to send queue again or drop
+	
+	boost::posix_time::time_duration lapse= resend_period - (boost::posix_time::second_clock::universal_time()- it->second.sent_time);
+
+	if(lapse.is_negative())
+	  if(it->second.tries <= args->retries) message_queue_akn[it->first]=it->second;	    
+	del_list.push_back(it->first);
+      }
+
+      for(int i=0; i<del_list.size(); i++) sent_list.erase(del_list.at(i));
+      
+      
+   
+    } // end of while
+
+
+  delete args;
+  args=0;
 
   pthread_exit(NULL);
 
 }
+
 
 bool SQLHandler::SendToThread(std::string message, std::string id){
 
@@ -196,44 +312,11 @@ bool SQLHandler:: Read(std::string table, Store& store, std::string fields, std:
 
 
 
+~SQLHandler::SQLHandler(){
 
-
-
-/*
-
-Thread_args* Utilities::CreateThread(std::string ThreadName,  void (*func)(std::string)){
-  Thread_args *args =0;
-
-  if(Threads.count(ThreadName)==0){
-
-    args = new Thread_args(context, ThreadName, func);
-    pthread_create(&(args->thread), NULL, Utilities::String_Thread, args);
-    args->sock=0;
-    args->running=true;
-    Threads[ThreadName]=args;
-  }
-
-  return args;
-}
-
-
-bool Utilities::KillThread(Thread_args* &args){
-
-  bool ret=false;
-
-  if(args){
-
-    args->running=false;
-    args->kill=true;
-
-    pthread_join(args->thread, NULL);
-    //delete args;
-    //args=0;
-
-
-  }
-
-  return ret;
+  args->kill=true;
+  pthread_join(args->thread, NULL);
+  args=0;
 
 }
-*/
+
